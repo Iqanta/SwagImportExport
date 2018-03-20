@@ -8,7 +8,11 @@ This advanced feature also comes with a massive performance boost in comparison 
  
 It is also possible to import files via shell command or cron job using this extension. 
  
-A well-organized overview allows you to review, download or repeat all past imports and exports. 
+A well-organized overview allows you to review, download or repeat all past imports and exports.
+
+## Additions
+
+- Exports can be filtered so that a single order can be exported. 
 
 ### Overview of all features:
 - Create own XML / CSV formats
