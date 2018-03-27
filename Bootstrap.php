@@ -148,8 +148,8 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
      */
     public function install()
     {
-        if (!$this->assertMinimumVersion('5.4.0')) {
-            throw new MinVersionException('This plugin requires Shopware 5.4.0 or a later version');
+        if (!$this->assertMinimumVersion('5.3.7')) {
+            throw new MinVersionException('This plugin requires Shopware 5.3.7 or a later version');
         }
         /** @var CacheManager $cacheManager */
         $cacheManager = $this->get('shopware.cache_manager');
@@ -206,8 +206,8 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
      */
     public function update($oldVersion)
     {
-        if (!$this->assertMinimumVersion('5.4.0')) {
-            throw new MinVersionException('This plugin requires Shopware 5.4.0 or a later version');
+        if (!$this->assertMinimumVersion('5.3.7')) {
+            throw new MinVersionException('This plugin requires Shopware 5.3.7 or a later version');
         }
 
         if (version_compare($oldVersion, '2.0.0', '<=')) {
