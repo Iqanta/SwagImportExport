@@ -20,6 +20,7 @@ use Shopware\Components\SwagImportExport\Transformers\DataTransformerChain;
 use Shopware\Components\SwagImportExport\UploadPathProvider;
 use Shopware\CustomModels\ImportExport\Profile as ProfileEntity;
 use Shopware\CustomModels\ImportExport\Repository;
+use Shopware\Models\Order\Order;
 
 class CommandHelper
 {
@@ -34,6 +35,9 @@ class CommandHelper
 
     /** @var string */
     protected $exportVariants;
+
+    /** @var Order */
+    protected $order;
 
     /** @var int */
     protected $limit;
@@ -88,6 +92,10 @@ class CommandHelper
         // optional
         if (isset($data['exportVariants'])) {
             $this->exportVariants = $data['exportVariants'];
+        }
+
+        if (isset($data['order'])) {
+            $this->order = $data['order'];
         }
 
         if (isset($data['limit'])) {
@@ -168,6 +176,10 @@ class CommandHelper
             $postData['filter']['customerStreamId'] = $this->customerStream;
         }
 
+        if ($this->order instanceof Order) {
+            $postData['filter']['orderId'] = $this->order->getId();
+        }
+
         /** @var Profile $profile */
         $profile = $this->plugin->getProfileFactory()->loadProfile($postData);
 
@@ -228,6 +240,10 @@ class CommandHelper
 
         if ($this->customerStream) {
             $postData['filter']['customerStreamId'] = $this->customerStream;
+        }
+
+        if ($this->order instanceof Order) {
+            $postData['filter']['orderId'] = $this->order->getId();
         }
 
         /** @var Profile $profile */

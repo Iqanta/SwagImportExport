@@ -70,6 +70,11 @@ class MainOrdersDbAdapter implements DataDbAdapter
             $builder->setParameter('orderstate', $filter['orderstate']);
         }
 
+        if (isset($filter['orderId']) && is_numeric($filter['orderId'])) {
+            $builder->andWhere('id = :orderId');
+            $builder->setParameter('orderId', $filter['orderId']);
+        }
+
         if (isset($filter['paymentstate']) && is_numeric($filter['paymentstate'])) {
             $builder->andWhere('cleared = :paymentstate');
             $builder->setParameter('paymentstate', $filter['paymentstate']);

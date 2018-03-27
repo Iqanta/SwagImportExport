@@ -8,12 +8,15 @@
 
 namespace Shopware\Commands\SwagImportExport;
 
+use Shopware\Bundle\AttributeBundle\Repository\RepositoryInterface;
 use Shopware\Commands\ShopwareCommand;
 use Shopware\Components\Model\ModelManager;
 use Shopware\Components\SwagImportExport\Utils\CommandHelper;
 use Shopware\Components\SwagImportExport\Utils\SwagVersionHelper;
 use Shopware\CustomModels\ImportExport\Profile;
 use Shopware\CustomModels\ImportExport\Repository;
+use Shopware\Models\Order\Order;
+use Shopware\Models\Order\Repository as OrderRepository;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -51,6 +54,12 @@ class ExportCommand extends ShopwareCommand
     /** @var int */
     protected $customerStream;
 
+    /** @var int */
+    protected $orderNumber;
+
+    /** @var Order */
+    protected $order;
+
     /**
      * {@inheritdoc}
      */
@@ -63,8 +72,9 @@ class ExportCommand extends ShopwareCommand
         if (SwagVersionHelper::hasMinimumVersion('5.3.0')) {
             $this->addOption('customerstream', 'u', InputOption::VALUE_OPTIONAL, 'Which customer stream id?');
         }
-        $this->addOption('format', 'f', InputOption::VALUE_OPTIONAL, 'What is the format of the imported file - XML or CSV?')
+        $this->addOption('format', 'f', InputOption::VALUE_OPTIONAL, 'What is the format of the exported file - XML or CSV?')
             ->addOption('exportVariants', 'x', InputOption::VALUE_NONE, 'Should the variants be exported?')
+            ->addOption('orderNumber', 'on', InputOption::VALUE_OPTIONAL, 'Filter order export by order number')
             ->addOption('offset', 'o', InputOption::VALUE_OPTIONAL, 'What is the offset?')
             ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'What is the limit?')
             ->addOption('category', 'c', InputOption::VALUE_OPTIONAL, 'Provide a category ID')
@@ -88,6 +98,7 @@ class ExportCommand extends ShopwareCommand
                 'customerStream' => $this->customerStream,
                 'format' => $this->format,
                 'exportVariants' => $this->exportVariants,
+                'order' => $this->order,
                 'limit' => $this->limit,
                 'offset' => $this->offset,
                 'username' => 'Commandline',
@@ -98,6 +109,9 @@ class ExportCommand extends ShopwareCommand
         $output->writeln('<info>' . sprintf('Using profile: %s.', $this->profile) . '</info>');
         if ($this->customerStream) {
             $output->writeln('<info>' . sprintf('Using customer stream: %d.', $this->customerStream) . '</info>');
+        }
+        if ($this->orderNumber) {
+            $output->writeln('<info>' . sprintf('Using order number: %d.', $this->orderNumber) . '</info>');
         }
         $output->writeln('<info>' . sprintf('Using format: %s.', $this->format) . '</info>');
         $output->writeln('<info>' . sprintf('Using file: %s.', $this->filePath) . '</info>');
@@ -135,6 +149,7 @@ class ExportCommand extends ShopwareCommand
         $this->limit = (int) $input->getOption('limit');
         $this->filePath = $input->getArgument('filepath');
         $this->category = $input->getOption('category');
+        $this->orderNumber = $input->getOption('orderNumber');
 
         if (!$this->filePath) {
             throw new \Exception('File path is required.');
@@ -147,6 +162,9 @@ class ExportCommand extends ShopwareCommand
 
         /** @var Repository $profileRepository */
         $profileRepository = $em->getRepository('Shopware\CustomModels\ImportExport\Profile');
+
+        /** @var OrderRepository $orderRepository */
+        $orderRepository = $em->getRepository('Shopware\Models\Order\Order');
 
         // if no profile is specified try to find it from the filename
         if ($this->profile === null) {
@@ -167,6 +185,11 @@ class ExportCommand extends ShopwareCommand
         if (!empty($this->customerStream)) {
             $customerStream = $em->find('Shopware\Models\CustomerStream\CustomerStream', $this->customerStream);
             $this->validateCustomerStream($customerStream);
+        }
+
+        if (!empty($this->orderNumber)) {
+            $this->order = $orderRepository->findOneBy(['number' => $this->orderNumber]);
+            $this->validateOrder();
         }
 
         // if no format is specified try to find it from the filename
@@ -212,6 +235,13 @@ class ExportCommand extends ShopwareCommand
 
         if (!in_array($this->profileEntity->getType(), ['customers', 'addresses'], true)) {
             throw new \Exception(sprintf('Customer stream export can not be used with profile: \'%s\'!', $this->profile));
+        }
+    }
+
+    protected function validateOrder()
+    {
+        if (!$this->order instanceof Order) {
+            throw new \Exception(sprintf("Invalid order number: %s! There is no order with this number.", $this->orderNumber));
         }
     }
 }
