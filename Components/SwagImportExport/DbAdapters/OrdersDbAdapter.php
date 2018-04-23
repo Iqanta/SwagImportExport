@@ -433,6 +433,7 @@ class OrdersDbAdapter implements DataDbAdapter
             'details.ean as ean',
             'details.packUnit as packUnit',
             'details.unit as unit',
+            'details_attributes.netPrice as net_price'
         ];
 
         $billingColumns = [
@@ -534,6 +535,7 @@ class OrdersDbAdapter implements DataDbAdapter
             ->from(Detail::class , 'details')
             ->leftJoin('details.order', 'orders')
             ->leftJoin('details.tax', 'taxes')
+            ->leftJoin('details.attribute', 'details_attributes')
             ->leftJoin('orders.billing', 'billing')
             ->leftJoin('billing.country', 'billingCountry')
             ->leftJoin('orders.shipping', 'shipping')
