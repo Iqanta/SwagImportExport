@@ -1,15 +1,14 @@
 <?php
-
 /**
  * (c) shopware AG <info@shopware.com>
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
  */
-
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Configuration;
 use Doctrine\ORM\Tools\SchemaTool;
+use DoctrineExtensions\Query\Mysql\GroupConcat;
 use Shopware\Commands\SwagImportExport\ExportCommand;
 use Shopware\Commands\SwagImportExport\ImportCommand;
 use Shopware\Commands\SwagImportExport\ProfilesCommand;
@@ -27,8 +26,13 @@ use Shopware\Components\SwagImportExport\Service\AutoImportServiceInterface;
 use Shopware\Components\SwagImportExport\Service\ExportService;
 use Shopware\Components\SwagImportExport\Service\ImportService;
 use Shopware\Components\SwagImportExport\Service\ProfileService;
+use Shopware\Components\SwagImportExport\Service\UnderscoreToCamelCaseService;
 use Shopware\Components\SwagImportExport\UploadPathProvider;
 use Shopware\Components\SwagImportExport\Utils\FileHelper;
+use Shopware\CustomModels\ImportExport\Expression;
+use Shopware\CustomModels\ImportExport\Logger as LoggerModel;
+use Shopware\CustomModels\ImportExport\Profile;
+use Shopware\CustomModels\ImportExport\Session;
 use Shopware\Setup\SwagImportExport\Exception\MinVersionException;
 use Shopware\Setup\SwagImportExport\Install\DefaultProfileInstaller;
 use Shopware\Setup\SwagImportExport\Install\InstallerInterface;
@@ -41,6 +45,7 @@ use Shopware\Setup\SwagImportExport\Update\Update02RemoveForeignKeyConstraint;
 use Shopware\Setup\SwagImportExport\Update\Update03DefaultProfileSupport;
 use Shopware\Setup\SwagImportExport\Update\Update04CreateColumns;
 use Shopware\Setup\SwagImportExport\Update\Update05CreateCustomerCompleteProfile;
+use Shopware\Setup\SwagImportExport\Update\Update06CreateCategoryTranslationProfile;
 use Shopware\Setup\SwagImportExport\Update\UpdaterInterface;
 
 /**
@@ -96,7 +101,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     /**
      * Returns the version of the plugin as a string
      *
-     * @throws Exception
+     * @throws RuntimeException
      *
      * @return string
      */
@@ -107,7 +112,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         if ($info) {
             return $info['currentVersion'];
         }
-        throw new Exception('The plugin has an invalid version file.');
+        throw new RuntimeException('The plugin has an invalid version file.');
     }
 
     /**
@@ -199,8 +204,6 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
      * @param string $oldVersion
      *
      * @throws MinVersionException
-     * @throws Exception
-     * @throws Zend_Db_Adapter_Exception
      *
      * @return array
      */
@@ -237,6 +240,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         $updaters[] = new Update03DefaultProfileSupport($setupContext, $this->get('dbal_connection'), $this->get('snippets'));
         $updaters[] = new Update04CreateColumns($setupContext, $this->get('dbal_connection'));
         $updaters[] = new Update05CreateCustomerCompleteProfile($setupContext, $this->get('dbal_connection'));
+        $updaters[] = new Update06CreateCategoryTranslationProfile($setupContext, $this->get('dbal_connection'));
         $updaters[] = new DefaultProfileUpdater($setupContext, $this->get('dbal_connection'), $this->get('snippets'));
 
         $this->registerControllers();
@@ -330,7 +334,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         $config = $this->em->getConfiguration();
         $classLoader = new \Doctrine\Common\ClassLoader('DoctrineExtensions', $this->Path() . 'Components/');
         $classLoader->register();
-        $config->addCustomStringFunction('GroupConcat', 'DoctrineExtensions\Query\Mysql\GroupConcat');
+        $config->addCustomStringFunction('GroupConcat', GroupConcat::class);
 
         $this->get('loader')->registerNamespace('Shopware\Components', $this->Path() . 'Components/');
         $this->get('loader')->registerNamespace('Shopware\Commands', $this->Path() . 'Commands/');
@@ -344,7 +348,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     public function getDataFactory()
     {
         if ($this->dataFactory === null) {
-            $this->dataFactory = Enlight_Class::Instance('Shopware\Components\SwagImportExport\Factories\DataFactory');
+            $this->dataFactory = Enlight_Class::Instance(DataFactory::class);
         }
 
         return $this->dataFactory;
@@ -356,7 +360,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     public function getProfileFactory()
     {
         if ($this->profileFactory === null) {
-            $this->profileFactory = Enlight_Class::Instance('Shopware\Components\SwagImportExport\Factories\ProfileFactory');
+            $this->profileFactory = Enlight_Class::Instance(ProfileFactory::class);
         }
 
         return $this->profileFactory;
@@ -368,7 +372,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     public function getFileIOFactory()
     {
         if ($this->fileIOFactory === null) {
-            $this->fileIOFactory = Enlight_Class::Instance('Shopware\Components\SwagImportExport\Factories\FileIOFactory');
+            $this->fileIOFactory = Enlight_Class::Instance(FileIOFactory::class);
         }
 
         return $this->fileIOFactory;
@@ -380,7 +384,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     public function getDataTransformerFactory()
     {
         if ($this->dataTransformerFactory === null) {
-            $this->dataTransformerFactory = Enlight_Class::Instance('Shopware\Components\SwagImportExport\Factories\DataTransformerFactory');
+            $this->dataTransformerFactory = Enlight_Class::Instance(DataTransformerFactory::class);
         }
 
         return $this->dataTransformerFactory;
@@ -394,6 +398,17 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     public function checkMinVersion($version)
     {
         return $this->assertMinimumVersion($version);
+    }
+
+    /**
+     * This event needs to be registered so it's guaranteed this plugin's afterInit() method will always be called and
+     * gets a chance to register the plugin's namespaces.
+     *
+     * @param \Enlight_Event_EventArgs $args
+     */
+    public function onStartDispatch(Enlight_Event_EventArgs $args)
+    {
+        // Nothing to do
     }
 
     /**
@@ -423,7 +438,8 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     {
         return new Logger(
             $this->get('swag_import_export.csv_file_writer'),
-            $this->get('models')
+            $this->get('models'),
+            $this->Application()->Container()->getParameter('shopware.app.rootdir') . 'var/log'
         );
     }
 
@@ -461,6 +477,9 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         );
     }
 
+    /**
+     * @return ProfileService
+     */
     public function registerProfileService()
     {
         return new ProfileService(
@@ -498,7 +517,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     public function injectBackendAceEditor(Enlight_Event_EventArgs $args)
     {
         /** @var Shopware_Controllers_Backend_Index $controller */
-        $controller = $args->getSubject();
+        $controller = $args->get('subject');
         $request = $controller->Request();
         $response = $controller->Response();
         $view = $controller->View();
@@ -546,6 +565,26 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
                 'required' => false,
                 'multiSelect' => false,
                 'value' => false,
+            ]
+        );
+
+        $form->setElement(
+            'number',
+            'batch-size-export',
+            [
+                'label' => 'Batch-Size Export',
+                'value' => 1000,
+                'minValue' => 0,
+            ]
+        );
+
+        $form->setElement(
+            'number',
+            'batch-size-import',
+            [
+                'label' => 'Batch-Size Import',
+                'value' => 50,
+                'minValue' => 0,
             ]
         );
 
@@ -612,10 +651,23 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     }
 
     /**
+     * @return UnderscoreToCamelCaseService
+     */
+    public function registerUnderscoreToCamelCaseService()
+    {
+        return new UnderscoreToCamelCaseService();
+    }
+
+    /**
      * Registers all necessary events.
      */
     protected function registerEvents()
     {
+        $this->subscribeEvent(
+            'Enlight_Controller_Front_StartDispatch',
+            'onStartDispatch'
+        );
+
         $this->subscribeEvent(
             'Enlight_Bootstrap_InitResource_swag_import_export.csv_file_writer',
             'registerCsvFileWriter'
@@ -654,6 +706,11 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         $this->subscribeEvent(
             'Enlight_Bootstrap_InitResource_swag_import_export.auto_importer',
             'registerAutoImportService'
+        );
+
+        $this->subscribeEvent(
+            'Enlight_Bootstrap_InitResource_swag_import_export.underscore_camelcase_service',
+            'registerUnderscoreToCamelCaseService'
         );
 
         $this->subscribeEvent(
@@ -803,6 +860,10 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         }
 
         $resource = $this->em->getRepository(\Shopware\Models\User\Resource::class)->find($resourceId);
+        if ($resource === null) {
+            return;
+        }
+
         foreach ($resource->getPrivileges() as $privilege) {
             $this->em->remove($privilege);
         }
@@ -828,10 +889,10 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
     private function getDoctrineModels()
     {
         return [
-            $this->em->getClassMetadata('Shopware\CustomModels\ImportExport\Session'),
-            $this->em->getClassMetadata('Shopware\CustomModels\ImportExport\Logger'),
-            $this->em->getClassMetadata('Shopware\CustomModels\ImportExport\Profile'),
-            $this->em->getClassMetadata('Shopware\CustomModels\ImportExport\Expression'),
+            $this->em->getClassMetadata(Session::class),
+            $this->em->getClassMetadata(LoggerModel::class),
+            $this->em->getClassMetadata(Profile::class),
+            $this->em->getClassMetadata(Expression::class),
         ];
     }
 
@@ -862,7 +923,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
         $profiles = $connection->fetchAll('SELECT COUNT(id) as count, name FROM s_import_export_profile GROUP BY name');
 
         foreach ($profiles as $profile) {
-            if ($profile['count'] == 1) {
+            if ((int) $profile['count'] === 1) {
                 continue;
             }
 

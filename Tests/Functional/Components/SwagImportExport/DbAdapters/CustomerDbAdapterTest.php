@@ -99,8 +99,8 @@ class CustomerDbAdapterTest extends TestCase
         /** @var Connection $dbalConnection */
         $dbalConnection = Shopware()->Container()->get('dbal_connection');
         $updatedUserBillingAddress = $dbalConnection->executeQuery("
-              SELECT * FROM s_user_billingaddress
-              WHERE userID = '1'"
+              SELECT * FROM s_user_addresses
+              WHERE user_id = '1'"
         )->fetchAll();
 
         $this->assertEquals($records['default'][0]['billingCity'], $updatedUserBillingAddress[0]['city']);
@@ -180,8 +180,8 @@ class CustomerDbAdapterTest extends TestCase
         /** @var Connection $dbalConnection */
         $dbalConnection = Shopware()->Container()->get('dbal_connection');
         $updatedUserBillingAddress = $dbalConnection->executeQuery("
-              SELECT * FROM s_user_billingaddress
-              WHERE userID = '1'"
+              SELECT * FROM s_user_addresses
+              WHERE user_id = '1'"
         )->fetchAll();
 
         $this->assertEquals($records['default'][0]['billingPhone'], $updatedUserBillingAddress[0]['phone']);
@@ -297,7 +297,7 @@ class CustomerDbAdapterTest extends TestCase
         ];
 
         $this->expectException(\Exception::class);
-        $this->expectExceptionMessage('Es sind bereits E-Mail Adressen mit test@example.com vorhanden. Bitte geben Sie auch die SubshopID an.');
+        $this->expectExceptionMessage('Es sind bereits E-Mail Adressen mit test@example.com und unterschiedlichen Kundennummern vorhanden. Bitte geben Sie auch die SubshopID an oder gleichen Sie die Kundennummer an.');
         $customerDbAdapter->write($records);
     }
 

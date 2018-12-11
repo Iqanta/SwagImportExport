@@ -1,5 +1,4 @@
 <?php
-
 /**
  * (c) shopware AG <info@shopware.com>
  *
@@ -19,6 +18,8 @@ class ExportService extends AbstractImportExportService implements ExportService
     /**
      * @param array $requestData
      * @param array $filterParams
+     *
+     * @return PreparationResultStruct
      */
     public function prepareExport(array $requestData, array $filterParams)
     {
@@ -96,12 +97,12 @@ class ExportService extends AbstractImportExportService implements ExportService
         $filter = [];
 
         // prepare article filter
-        if ($profileType === DataDbAdapter::ARTICLE_ADAPTER) {
-            $filter['variants'] = $filterParams['variants'] ? true : false;
+        if ($profileType === DataDbAdapter::ARTICLE_ADAPTER || $profileType === DataDbAdapter::ARTICLE_PRICE_ADAPTER) {
+            $filter['variants'] = (bool) $filterParams['variants'];
             if (isset($filterParams['categories'])) {
-                $filter['categories'] = [
-                    $filterParams['categories'],
-                ];
+                $filter['categories'] = [$filterParams['categories']];
+            } elseif (isset($filterParams['productStreamId'])) {
+                $filter['productStreamId'] = [$filterParams['productStreamId']];
             }
         }
 

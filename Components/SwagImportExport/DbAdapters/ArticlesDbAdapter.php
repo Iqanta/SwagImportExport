@@ -1,5 +1,4 @@
 <?php
-
 /**
  * (c) shopware AG <info@shopware.com>
  *
@@ -13,6 +12,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\ORM\Query\Expr\Join;
 use Enlight_Components_Db_Adapter_Pdo_Mysql;
 use Shopware\Bundle\MediaBundle\MediaServiceInterface;
+use Shopware\Bundle\SearchBundle\ProductNumberSearchResult;
 use Shopware\Components\ContainerAwareEventManager;
 use Shopware\Components\Model\ModelManager;
 use Shopware\Components\SwagImportExport\DbAdapters\Articles\ArticleWriter;
@@ -25,12 +25,11 @@ use Shopware\Components\SwagImportExport\DbAdapters\Articles\RelationWriter;
 use Shopware\Components\SwagImportExport\DbAdapters\Articles\TranslationWriter;
 use Shopware\Components\SwagImportExport\DbAdapters\Results\ArticleWriterResult;
 use Shopware\Components\SwagImportExport\Exception\AdapterException;
+use Shopware\Components\SwagImportExport\Service\UnderscoreToCamelCaseServiceInterface;
 use Shopware\Components\SwagImportExport\Utils\DbAdapterHelper;
 use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
-use Shopware\Components\SwagImportExport\Utils\SwagVersionHelper;
 use Shopware\Models\Article\Article;
 use Shopware\Models\Article\Detail;
-use Shopware\Models\Article\Element;
 use Shopware\Models\Attribute\Configuration;
 use Shopware\Models\Category\Category;
 use Shopware\Models\Shop\Shop;
@@ -95,6 +94,11 @@ class ArticlesDbAdapter implements DataDbAdapter
      */
     private $eventManager;
 
+    /**
+     * @var UnderscoreToCamelCaseServiceInterface
+     */
+    private $underscoreToCamelCaseService;
+
     public function __construct()
     {
         $this->db = Shopware()->Container()->get('db');
@@ -102,6 +106,7 @@ class ArticlesDbAdapter implements DataDbAdapter
         $this->mediaService = Shopware()->Container()->get('shopware_media.media_service');
         $this->config = Shopware()->Container()->get('config');
         $this->eventManager = Shopware()->Container()->get('events');
+        $this->underscoreToCamelCaseService = Shopware()->Container()->get('swag_import_export.underscore_camelcase_service');
     }
 
     /**
@@ -132,6 +137,7 @@ class ArticlesDbAdapter implements DataDbAdapter
         }
 
         if ($filter['categories']) {
+            /** @var Category $category */
             $category = $this->modelManager->find(Category::class, $filter['categories'][0]);
 
             $this->collectCategoryIds($category);
@@ -155,6 +161,26 @@ class ArticlesDbAdapter implements DataDbAdapter
             $builder->join('detail.article', 'article')
                 ->andWhere('article.id IN (:ids)')
                 ->setParameter('ids', $articleIds);
+        } elseif ($filter['productStreamId']) {
+            $productStreamId = $filter['productStreamId'][0];
+
+            /** @var \Shopware\Models\Shop\Repository $shopRepo */
+            $shopRepo = $this->modelManager->getRepository(Shop::class);
+            $shop = $shopRepo->getActiveDefault();
+            $contextService = Shopware()->Container()->get('shopware_storefront.context_service');
+            $context = $contextService->createShopContext($shop->getId());
+            $criteriaService = Shopware()->Container()->get('shopware_search.store_front_criteria_factory');
+            $criteria = $criteriaService->createBaseCriteria([$shop->getCategory()->getId()], $context);
+            $streamRepo = Shopware()->Container()->get('shopware_product_stream.repository');
+            $streamRepo->prepareCriteria($criteria, $productStreamId);
+
+            $productNumberSearch = Shopware()->Container()->get('shopware_search.product_number_search');
+            /** @var ProductNumberSearchResult $products */
+            $products = $productNumberSearch->search($criteria, $context);
+            $productNumbers = array_keys($products->getProducts());
+
+            $builder->andWhere('detail.number IN(:productNumbers)')
+                ->setParameter('productNumbers', $productNumbers);
         }
 
         if ($start) {
@@ -298,12 +324,12 @@ class ArticlesDbAdapter implements DataDbAdapter
      */
     public function prepareTranslationExport($ids)
     {
-        $articleDetailIds = implode(',', $ids);
+        $productDetailIds = implode(',', $ids);
 
         $sql = "SELECT variant.articleID as articleId, variant.id as variantId, variant.kind, ct.objectdata, ct.objectlanguage as languageId
                 FROM s_articles_details AS variant
                 LEFT JOIN s_core_translations AS ct ON variant.id = ct.objectkey AND objecttype = 'variant'
-                WHERE variant.id IN ($articleDetailIds)
+                WHERE variant.id IN ($productDetailIds)
                 ORDER BY languageId ASC
                 ";
         $translations = $this->db->query($sql)->fetchAll();
@@ -312,13 +338,13 @@ class ArticlesDbAdapter implements DataDbAdapter
         $translationFields = $this->getTranslationFields();
         $rows = [];
         foreach ($translations as $index => $record) {
-            $articleId = $record['articleId'];
+            $productId = $record['articleId'];
             $variantId = $record['variantId'];
             $languageId = $record['languageId'];
             $kind = $record['kind'];
-            $rows[$variantId]['helper']['articleId'] = $articleId;
+            $rows[$variantId]['helper']['articleId'] = $productId;
             $rows[$variantId]['helper']['variantKind'] = $kind;
-            $rows[$variantId][$languageId]['articleId'] = $articleId;
+            $rows[$variantId][$languageId]['articleId'] = $productId;
             $rows[$variantId][$languageId]['variantId'] = $variantId;
             $rows[$variantId][$languageId]['languageId'] = $languageId;
             $rows[$variantId][$languageId]['variantKind'] = $kind;
@@ -366,34 +392,33 @@ class ArticlesDbAdapter implements DataDbAdapter
         $sql = "SELECT variant.articleID as articleId, ct.objectdata, ct.objectlanguage as languageId
                 FROM s_articles_details AS variant
                 LEFT JOIN s_core_translations AS ct ON variant.articleID = ct.objectkey
-                WHERE variant.id IN ($articleDetailIds) AND objecttype = 'article'
+                WHERE variant.id IN ($productDetailIds) AND objecttype = 'article'
                 GROUP BY ct.id
                 ";
-        $articles = $this->db->query($sql)->fetchAll();
+        $products = $this->db->query($sql)->fetchAll();
+
+        $mappedProducts = [];
+        foreach($products as $product) {
+            $mappedProducts[$product['articleId']][$product['languageId']] = $product;
+        }
 
         foreach ($result as $index => $translation) {
-            foreach ($articles as $article) {
-                //the translation for the main variant is coming
-                //from article translations
-                if ((int) $translation['variantKind'] === 1
-                    && $translation['articleId'] === $article['articleId']
-                    && $translation['languageId'] === $article['languageId']
-                ) {
-                    $serializeData = unserialize($article['objectdata']);
-                    foreach ($translationFields as $key => $field) {
-                        $result[$index][$field] = $serializeData[$key];
-                    }
-                } elseif ($translation['articleId'] === $article['articleId']
-                    && $translation['languageId'] === $article['languageId']
-                ) {
-                    $data = unserialize($article['objectdata']);
-                    $result[$index]['name'] = $data['txtArtikel'];
-                    $result[$index]['description'] = $data['txtshortdescription'];
-                    $result[$index]['descriptionLong'] = $data['txtlangbeschreibung'];
-                    $result[$index]['metaTitle'] = $data['metaTitle'];
-                    $result[$index]['keywords'] = $data['txtkeywords'];
+            $matchedProductTranslation = $mappedProducts[$translation['articleId']][$translation['languageId']];
+            if ((int) $translation['variantKind'] === 1 && $matchedProductTranslation) {
+                $serializeData = unserialize($matchedProductTranslation['objectdata']);
+                foreach ($translationFields as $key => $field) {
+                    $result[$index][$field] = $serializeData[$key];
                 }
+
+                continue;
             }
+
+            $data = unserialize($matchedProductTranslation['objectdata']);
+            $result[$index]['name'] = $data['txtArtikel'];
+            $result[$index]['description'] = $data['txtshortdescription'];
+            $result[$index]['descriptionLong'] = $data['txtlangbeschreibung'];
+            $result[$index]['metaTitle'] = $data['metaTitle'];
+            $result[$index]['keywords'] = $data['txtkeywords'];
         }
 
         return $result;
@@ -569,7 +594,7 @@ class ArticlesDbAdapter implements DataDbAdapter
         if ($attributes) {
             $prefix = 'attribute';
             foreach ($attributes as $attribute) {
-                $attr = $this->underscoreToCamelCase($attribute);
+                $attr = $this->underscoreToCamelCaseService->underscoreToCamelCase($attribute);
 
                 $attributesSelect[] = sprintf('%s.%s as attribute%s', $prefix, $attr, ucwords($attr));
             }
@@ -815,16 +840,6 @@ class ArticlesDbAdapter implements DataDbAdapter
             'translation.packUnit as packUnit',
         ];
 
-        if (!SwagVersionHelper::hasMinimumVersion('5.3.0')) {
-            $legacyAttributes = $this->getLegacyTranslationAttr();
-
-            if ($legacyAttributes) {
-                foreach ($legacyAttributes as $attr) {
-                    $columns[] = $attr['name'];
-                }
-            }
-        }
-
         $attributes = $this->getTranslatableAttributes();
 
         if ($attributes) {
@@ -834,16 +849,6 @@ class ArticlesDbAdapter implements DataDbAdapter
         }
 
         return $columns;
-    }
-
-    /**
-     * @return array
-     */
-    public function getLegacyTranslationAttr()
-    {
-        $elementBuilder = $this->getElementBuilder();
-
-        return $elementBuilder->getQuery()->getArrayResult();
     }
 
     /**
@@ -1212,20 +1217,6 @@ class ArticlesDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @return \Doctrine\ORM\QueryBuilder
-     */
-    public function getElementBuilder()
-    {
-        $repository = $this->modelManager->getRepository(Element::class);
-
-        $builder = $repository->createQueryBuilder('attribute');
-        $builder->andWhere('attribute.translatable = 1');
-        $builder->orderBy('attribute.position');
-
-        return $builder;
-    }
-
-    /**
      * Returns article ids
      *
      * @param $detailIds
@@ -1380,13 +1371,6 @@ class ArticlesDbAdapter implements DataDbAdapter
             'txtshortdescription' => 'description',
             'txtlangbeschreibung' => 'descriptionLong',
         ];
-
-        if (!SwagVersionHelper::hasMinimumVersion('5.3.0')) {
-            $legacyAttributes = $this->getLegacyTranslationAttr();
-            foreach ($legacyAttributes as $attr) {
-                $translationFields[$attr['name']] = $attr['name'];
-            }
-        }
 
         $attributes = $this->getTranslatableAttributes();
         foreach ($attributes as $attribute) {
@@ -1574,18 +1558,6 @@ class ArticlesDbAdapter implements DataDbAdapter
                     && $articleWriterResult->getMainDetailId() === $articleWriterResult->getDetailId();
             }
         );
-    }
-
-    /**
-     * @example: underscore_string will result in underscoreString
-     *
-     * @param string $underscoreString
-     *
-     * @return string
-     */
-    private function underscoreToCamelCase($underscoreString)
-    {
-        return lcfirst(str_replace(' ', '', ucwords(str_replace('_', ' ', $underscoreString))));
     }
 
     /**

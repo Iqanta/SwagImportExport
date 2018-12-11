@@ -24,51 +24,88 @@ use Shopware\Models\Order\Order;
 
 class CommandHelper
 {
-    /** @var ProfileEntity */
+    /**
+     * @var ProfileEntity
+     */
     protected $profileEntity;
 
-    /** @var string */
+    /**
+     * @var string
+     */
     protected $filePath;
 
-    /** @var string */
+    /**
+     * @var string
+     */
     protected $format;
 
-    /** @var string */
+    /**
+     * @var string
+     */
     protected $exportVariants;
 
     /** @var Order */
     protected $order;
 
-    /** @var int */
+    /**
+     * @var int
+     */
     protected $limit;
 
-    /** @var int */
+    /**
+     * @var int
+     */
     protected $offset;
 
-    /** @var string */
+    /**
+     * @var string
+     */
+    protected $dateFrom;
+
+    /**
+     * @var string
+     */
+    protected $dateTo;
+
+    /**
+     * @var string
+     */
     protected $username;
 
-    /** @var string */
+    /**
+     * @var string
+     */
     protected $category;
 
-    /** @var int */
+    /**
+     * @var int
+     */
+    protected $productStream;
+
+    /**
+     * @var int
+     */
     protected $sessionId;
 
-    /** @var \Shopware_Plugins_Backend_SwagImportExport_Bootstrap */
+    /**
+     * @var \Shopware_Plugins_Backend_SwagImportExport_Bootstrap
+     */
     protected $plugin;
 
-    /** @var Logger */
+    /**
+     * @var Logger
+     */
     protected $logger;
 
-    /** @var int */
+    /**
+     * @var int
+     */
     protected $customerStream;
 
     /**
-     * Construct
-     *
      * @param array $data
      *
-     * @throws \Exception
+     * @throws \RuntimeException
      */
     public function __construct(array $data)
     {
@@ -76,13 +113,13 @@ class CommandHelper
         $this->logger = Shopware()->Container()->get('swag_import_export.logger');
 
         if (!isset($data['profileEntity'])) {
-            throw new \Exception('No profile given!');
+            throw new \RuntimeException('No profile given!');
         }
         if (!isset($data['format'])) {
-            throw new \Exception('No format given!');
+            throw new \RuntimeException('No format given!');
         }
         if (!isset($data['filePath']) || !is_dir(dirname($data['filePath']))) {
-            throw new \Exception('Invalid file path ' . $data['filePath']);
+            throw new \RuntimeException('Invalid file path ' . $data['filePath']);
         }
 
         $this->profileEntity = $data['profileEntity'];
@@ -106,12 +143,24 @@ class CommandHelper
             $this->offset = $data['offset'];
         }
 
+        if (isset($data['dateFrom'])) {
+            $this->dateFrom = $data['dateFrom'];
+        }
+
+        if (isset($data['dateTo'])) {
+            $this->dateTo = $data['dateTo'];
+        }
+
         if (isset($data['username'])) {
             $this->username = $data['username'];
         }
 
         if (!empty($data['category'])) {
             $this->category = $data['category'];
+        }
+
+        if (!empty($data['productStream'])) {
+            $this->productStream = $data['productStream'];
         }
 
         if (!empty($data['customerStream'])) {
@@ -172,12 +221,24 @@ class CommandHelper
             $postData['filter']['categories'] = $this->category;
         }
 
+        if ($this->productStream) {
+            $postData['filter']['productStreamId'] = $this->productStream;
+        }
+
         if ($this->customerStream) {
             $postData['filter']['customerStreamId'] = $this->customerStream;
         }
 
         if ($this->order instanceof Order) {
             $postData['filter']['orderId'] = $this->order->getId();
+        }
+
+        if ($this->dateFrom) {
+            $postData['filter']['dateFrom'] = $this->dateFrom;
+        }
+
+        if ($this->dateTo) {
+            $postData['filter']['dateTo'] = $this->dateTo;
         }
 
         /** @var Profile $profile */
@@ -234,16 +295,28 @@ class CommandHelper
         if ($this->exportVariants) {
             $postData['filter']['variants'] = $this->exportVariants;
         }
+
         if ($this->category) {
             $postData['filter']['categories'] = $this->category;
         }
 
+        if ($this->productStream) {
+            $postData['filter']['productStreamId'] = $this->productStream;
+        }
         if ($this->customerStream) {
             $postData['filter']['customerStreamId'] = $this->customerStream;
         }
 
         if ($this->order instanceof Order) {
             $postData['filter']['orderId'] = $this->order->getId();
+        }
+
+        if ($this->dateFrom) {
+            $postData['filter']['dateFrom'] = $this->dateFrom;
+        }
+
+        if ($this->dateTo) {
+            $postData['filter']['dateTo'] = $this->dateTo;
         }
 
         /** @var Profile $profile */
@@ -433,7 +506,7 @@ class CommandHelper
             $resultData = $dataWorkflow->import($postData, $inputFile);
 
             if (isset($resultData['unprocessedData']) && $resultData['unprocessedData']) {
-                $data = [
+                $unprocessedData = [
                     'data' => $resultData['unprocessedData'],
                     'session' => [
                         'prevState' => $sessionState,
@@ -441,26 +514,21 @@ class CommandHelper
                     ],
                 ];
 
-                $pathInfo = pathinfo($inputFile);
-
-                foreach ($data['data'] as $key => $value) {
+                foreach ($unprocessedData['data'] as $profileName => $value) {
                     $outputFile = $uploadPathProvider->getRealPath(
-                        $pathInfo['filename'] . '-' . $key . '-tmp.csv'
+                        $uploadPathProvider->getFileNameFromPath($inputFile) . '-' . $profileName . '-tmp.csv'
                     );
 
-                    $post['unprocessed'][] = [
-                        'profileName' => $key,
-                        'fileName' => $outputFile,
-                    ];
-                    $this->afterImport($data, $key, $outputFile);
+                    $this->afterImport($unprocessedData, $profileName, $outputFile);
+                    $unprocessedFiles[$profileName] = $outputFile;
                 }
             }
 
             $this->sessionId = $resultData['sessionId'];
 
-            if (
-                $dataSession->getTotalCount() > 0
-                && ($dataSession->getTotalCount() == $resultData['position'])
+            $dataSessionTotalCount = $dataSession->getTotalCount();
+            if ($dataSessionTotalCount > 0
+                && ($dataSessionTotalCount == $resultData['position'])
                 && $this->logger->getMessage() === null
             ) {
                 $message = sprintf(

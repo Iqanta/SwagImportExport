@@ -8,25 +8,20 @@
 
 namespace Shopware\Components\SwagImportExport\DbAdapters;
 
+use Enlight_Components_Db_Adapter_Pdo_Mysql;
 use Shopware\Components\Model\ModelManager;
+use Shopware\Components\Model\QueryBuilder;
+use Shopware\Components\StateTranslatorService;
+use Shopware\Components\StateTranslatorServiceInterface;
+use Shopware\Components\SwagImportExport\Service\UnderscoreToCamelCaseServiceInterface;
 use Shopware\Components\SwagImportExport\Utils\DbAdapterHelper;
 use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
-use Shopware\Models\Tax\Tax;
 use Shopware\Models\Order\Order;
-use Enlight_Components_Db_Adapter_Pdo_Mysql;
+use Shopware\Models\Order\Status;
+use Shopware\Models\Tax\Tax;
 
 class MainOrdersDbAdapter implements DataDbAdapter
 {
-    /**
-     * @var ModelManager $modelManager
-     */
-    private $modelManager;
-
-    /**
-     * @var Enlight_Components_Db_Adapter_Pdo_Mysql $db
-     */
-    private $db;
-
     /**
      * @var array
      */
@@ -42,18 +37,41 @@ class MainOrdersDbAdapter implements DataDbAdapter
      */
     protected $logState;
 
+    /**
+     * @var ModelManager
+     */
+    private $modelManager;
+
+    /**
+     * @var Enlight_Components_Db_Adapter_Pdo_Mysql
+     */
+    private $db;
+
+    /**
+     * @var UnderscoreToCamelCaseServiceInterface
+     */
+    private $underscoreToCamelCaseService;
+
+    /**
+     * @var StateTranslatorServiceInterface
+     */
+    private $stateTranslator;
+
     public function __construct()
     {
         $this->db = Shopware()->Container()->get('db');
         $this->modelManager = Shopware()->Container()->get('models');
+        $this->underscoreToCamelCaseService = Shopware()->Container()->get('swag_import_export.underscore_camelcase_service');
+        $this->stateTranslator = Shopware()->Container()->get('shopware.components.state_translator');
     }
 
     /**
      * Returns orders' ids. Executed during `prepareExport`.
      *
-     * @param int $start
-     * @param int $limit
+     * @param int   $start
+     * @param int   $limit
      * @param array $filter
+     *
      * @return array
      */
     public function readRecordIds($start = null, $limit = null, $filter = null)
@@ -63,7 +81,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
         /* @var \Doctrine\DBAL\Query\QueryBuilder */
         $builder = $connection->createQueryBuilder();
         $builder->select('id')
-                ->from('s_order');
+            ->from('s_order');
 
         if (isset($filter['orderstate']) && is_numeric($filter['orderstate'])) {
             $builder->andWhere('status = :orderstate');
@@ -116,8 +134,10 @@ class MainOrdersDbAdapter implements DataDbAdapter
      *
      * @param $ids
      * @param $columns
+     *
+     * @throws \RuntimeException
+     *
      * @return array
-     * @throws \Exception
      */
     public function read($ids, $columns)
     {
@@ -126,7 +146,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
                 'adapters/orders/no_ids',
                 'Can not read orders without ids.'
             );
-            throw new \Exception($message);
+            throw new \RuntimeException($message);
         }
 
         if (!$columns) {
@@ -134,7 +154,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
                 'adapters/orders/no_column_names',
                 'Can not read orders without column names.'
             );
-            throw new \Exception($message);
+            throw new \RuntimeException($message);
         }
 
         $result = [];
@@ -146,6 +166,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
             $orders = $orderBuilder->getQuery()->getResult();
             $orders = DbAdapterHelper::decodeHtmlEntities($orders);
             $orders = DbAdapterHelper::escapeNewLines($orders);
+            $orders = $this->addOrderAndPaymentState($orders);
             $result = ['order' => $orders];
         }
 
@@ -195,8 +216,6 @@ class MainOrdersDbAdapter implements DataDbAdapter
             'orders.net',
             'orders.taxFree',
             'payment.description as paymentName',
-            'paymentStatus.description as paymentState',
-            'orderStatus.description as orderState',
             'orders.currency',
             'orders.currencyFactor',
             'orders.transactionId',
@@ -229,7 +248,9 @@ class MainOrdersDbAdapter implements DataDbAdapter
             'shipping.additionalAddressLine1 as shippingAdditionalAddressLine1',
             'shipping.additionalAddressLine2 as shippingAdditionalAddressLine2',
             'sState.name as shippingState',
-            'sCountry.name as shippingCountry'
+            'sCountry.name as shippingCountry',
+            'paymentStatus.id as paymentStateId',
+            'orderStatus.id as orderStateId',
         ];
 
         $attributesSelect = $this->getAttributes();
@@ -241,8 +262,9 @@ class MainOrdersDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @return array|string
      * @throws \Zend_Db_Statement_Exception
+     *
+     * @return array|string
      */
     public function getAttributes()
     {
@@ -254,16 +276,13 @@ class MainOrdersDbAdapter implements DataDbAdapter
             return '';
         }
 
-        unset($attributes['id']);
-        unset($attributes['orderID']);
+        unset($attributes['id'], $attributes['orderID']);
         $attributes = array_keys($attributes);
 
         $prefix = 'attr';
         $attributesSelect = [];
         foreach ($attributes as $attribute) {
-            //underscore to camel case
-            //exmaple: underscore_to_camel_case -> underscoreToCamelCase
-            $catAttr = lcfirst(str_replace(' ', '', ucwords(str_replace('_', ' ', $attribute))));
+            $catAttr = $this->underscoreToCamelCaseService->underscoreToCamelCase($attribute);
 
             $attributesSelect[] = sprintf('%s.%s as attribute%s', $prefix, $catAttr, ucwords($catAttr));
         }
@@ -273,13 +292,14 @@ class MainOrdersDbAdapter implements DataDbAdapter
 
     /**
      * @param $records
-     * @throws \Exception
+     *
+     * @throws \RuntimeException
      */
     public function write($records)
     {
         $message = SnippetsHelper::getNamespace()
             ->get('adapters/mainOrders/use_order_profile_for_import', 'This is only an export profile. Please use `Orders` profile for imports!');
-        throw new \Exception($message);
+        throw new \RuntimeException($message);
     }
 
     /**
@@ -291,14 +311,15 @@ class MainOrdersDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @param $message
-     * @throws \Exception
+     * @param string $message
+     *
+     * @throws \RuntimeException
      */
     public function saveMessage($message)
     {
         $errorMode = Shopware()->Config()->get('SwagImportExportErrorMode');
         if ($errorMode === false) {
-            throw new \Exception($message);
+            throw new \RuntimeException($message);
         }
 
         $this->setLogMessages($message);
@@ -314,7 +335,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @param array $logMessages
+     * @param string $logMessages
      */
     public function setLogMessages($logMessages)
     {
@@ -330,7 +351,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @param $logState
+     * @param string $logState
      */
     public function setLogState($logState)
     {
@@ -342,10 +363,10 @@ class MainOrdersDbAdapter implements DataDbAdapter
      */
     public function getSections()
     {
-        return array(
-            array('id' => 'order', 'name' => 'order'),
-            array('id' => 'taxRateSum', 'name' => 'taxRateSum')
-        );
+        return [
+            ['id' => 'order', 'name' => 'order'],
+            ['id' => 'taxRateSum', 'name' => 'taxRateSum'],
+        ];
     }
 
     /**
@@ -353,11 +374,12 @@ class MainOrdersDbAdapter implements DataDbAdapter
      */
     public function getParentKeys()
     {
-        return array('orders.id as orderId');
+        return ['orders.id as orderId'];
     }
 
     /**
      * @param $section
+     *
      * @return bool|array
      */
     public function getColumns($section)
@@ -373,7 +395,8 @@ class MainOrdersDbAdapter implements DataDbAdapter
     /**
      * @param array $columns
      * @param array $ids
-     * @return \Doctrine\ORM\QueryBuilder|\Shopware\Components\Model\QueryBuilder
+     *
+     * @return QueryBuilder
      */
     public function getOrderBuilder($columns, $ids)
     {
@@ -402,7 +425,81 @@ class MainOrdersDbAdapter implements DataDbAdapter
 
     /**
      * @param array $ids
+     *
+     * @return QueryBuilder
+     */
+    public function getTaxSumBuilder($ids)
+    {
+        $builder = $this->modelManager->createQueryBuilder();
+        $builder->select(['details.orderId, orders.invoiceAmount, orders.invoiceAmountNet, orders.invoiceShipping, orders.invoiceShippingNet, orders.net, details.price, details.quantity, details.taxId, details.taxRate'])
+            ->from(Order::class, 'orders')
+            ->leftJoin('orders.details', 'details')
+            ->where('details.orderId IN (:ids)')
+            ->andWhere('orders.taxFree = 0')
+            ->setParameter('ids', $ids)
+            ->orderBy('details.orderId, details.taxRate', 'ASC');
+
+        return $builder;
+    }
+
+    /**
      * @param array $orders
+     *
+     * @return array
+     */
+    private function addOrderAndPaymentState(array $orders)
+    {
+        $states = $this->getStates();
+
+        foreach ($orders as &$order) {
+            $order['paymentState'] = $this->getStateName((int) $order['paymentStateId'], $states);
+            $order['orderState'] = $this->getStateName((int) $order['orderStateId'], $states);
+        }
+
+        return $orders;
+    }
+
+    /**
+     * @param int   $id
+     * @param array $states
+     *
+     * @return string
+     */
+    private function getStateName($id, array $states)
+    {
+        foreach ($states as $state) {
+            if ($id === (int) $state['id']) {
+                return $state['description'];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @return array
+     */
+    private function getStates()
+    {
+        $data = $this->modelManager->getRepository(Status::class)->createQueryBuilder('state')
+            ->select('state')
+            ->getQuery()
+            ->getArrayResult();
+
+        foreach ($data as $key => $state) {
+            $data[$key] = $this->stateTranslator->translateState(
+                $state['group'] === 'state' ? StateTranslatorService::STATE_ORDER : $state['group'],
+                $state
+            );
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param array $ids
+     * @param array $orders
+     *
      * @return array
      */
     private function getTaxSums($ids, $orders)
@@ -439,7 +536,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
                 $result[] = [
                     'orderId' => $orderId,
                     'taxRateSums' => $vat,
-                    'taxRate' => $taxRate
+                    'taxRate' => $taxRate,
                 ];
             }
         }
@@ -452,6 +549,7 @@ class MainOrdersDbAdapter implements DataDbAdapter
      *
      * @param float $amount
      * @param float $amountNet
+     *
      * @return float
      */
     private function getShippingRate($amount, $amountNet)
@@ -462,46 +560,32 @@ class MainOrdersDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @param array $ids
-     * @return \Doctrine\ORM\QueryBuilder|\Shopware\Components\Model\QueryBuilder
-     */
-    public function getTaxSumBuilder($ids)
-    {
-        $builder = $this->modelManager->createQueryBuilder();
-        $builder->select(['details.orderId, orders.invoiceAmount, orders.invoiceAmountNet, orders.invoiceShipping, orders.invoiceShippingNet, orders.net, details.price, details.quantity, details.taxId, details.taxRate'])
-            ->from(Order::class, 'orders')
-            ->leftJoin('orders.details', 'details')
-            ->where('details.orderId IN (:ids)')
-            ->andWhere('orders.taxFree = 0')
-            ->setParameter('ids', $ids)
-            ->orderBy('details.orderId, details.taxRate', 'ASC');
-
-        return $builder;
-    }
-
-    /**
      * @param array $taxData
+     *
      * @return float
-     * @throws \Doctrine\ORM\ORMException
-     * @throws \Doctrine\ORM\OptimisticLockException
-     * @throws \Doctrine\ORM\TransactionRequiredException
      */
     private function calculateTaxSum($taxData)
     {
-        if (empty($taxData['taxRate'])) {
-            $taxModel = $this->modelManager->getRepository(Tax::class)->find($taxData['taxId']);
-            if ($taxModel && $taxModel->getId() !== 0 && $taxModel->getId() !== null && $taxModel->getTax() !== null) {
-                $taxValue = $taxModel->getTax();
-            }
-        } else {
+        $taxValue = 0;
+        if (!empty($taxData['taxRate'])) {
             $taxValue = $taxData['taxRate'];
+        } elseif ($taxData['taxId'] !== null) {
+            /** @var Tax $taxModel */
+            $taxModel = $this->modelManager->getRepository(Tax::class)->find($taxData['taxId']);
+            if ($taxModel !== null) {
+                $taxId = $taxModel->getId();
+                $tax = $taxModel->getTax();
+                if ($taxId !== 0 && $taxId !== null && $tax !== null) {
+                    $taxValue = $tax;
+                }
+            }
         }
 
         $price = $taxData['price'] * $taxData['quantity'];
         if ($taxData['net']) {
             return round(($taxValue / 100) * $price, 2);
-        } else {
-            return round($price * ($taxValue / (100 + $taxValue)), 2);
         }
+
+        return round($price * ($taxValue / (100 + $taxValue)), 2);
     }
 }

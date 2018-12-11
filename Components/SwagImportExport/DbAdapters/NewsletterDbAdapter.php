@@ -12,16 +12,16 @@ use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\Query\Expr\Join;
 use Shopware\Components\Model\ModelManager;
 use Shopware\Components\Model\QueryBuilder;
+use Shopware\Components\SwagImportExport\DataManagers\NewsletterDataManager;
 use Shopware\Components\SwagImportExport\DataType\NewsletterDataType;
+use Shopware\Components\SwagImportExport\Exception\AdapterException;
+use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
+use Shopware\Components\SwagImportExport\Validators\NewsletterValidator;
 use Shopware\Models\Customer\Customer;
 use Shopware\Models\Customer\Repository;
 use Shopware\Models\Newsletter\Address;
-use Shopware\Models\Newsletter\Group;
 use Shopware\Models\Newsletter\ContactData;
-use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
-use Shopware\Components\SwagImportExport\Exception\AdapterException;
-use Shopware\Components\SwagImportExport\Validators\NewsletterValidator;
-use Shopware\Components\SwagImportExport\DataManagers\NewsletterDataManager;
+use Shopware\Models\Newsletter\Group;
 
 class NewsletterDbAdapter implements DataDbAdapter
 {
@@ -30,7 +30,7 @@ class NewsletterDbAdapter implements DataDbAdapter
      */
     protected $db;
 
-    /** @var boolean */
+    /** @var bool */
     protected $errorMode;
 
     /**
@@ -86,14 +86,16 @@ class NewsletterDbAdapter implements DataDbAdapter
             'na.email as email',
             'ng.name as groupName',
             'CASE WHEN (cb.salutation IS NULL) THEN cd.salutation ELSE cb.salutation END as salutation',
-            'CASE WHEN (cb.firstName IS NULL) THEN cd.firstName ELSE cb.firstName END as firstName',
-            'CASE WHEN (cb.lastName IS NULL) THEN cd.lastName ELSE cb.lastName END as lastName',
+            'CASE WHEN (cb.firstname IS NULL) THEN cd.firstName ELSE cb.firstname END as firstName',
+            'CASE WHEN (cb.lastname IS NULL) THEN cd.lastName ELSE cb.lastname END as lastName',
             'CASE WHEN (cb.street IS NULL) THEN cd.street ELSE cb.street END as street',
             'CASE WHEN (cb.city IS NULL) THEN cd.city ELSE cb.city END as city',
-            'CASE WHEN (cb.zipCode IS NULL) THEN cd.zipCode ELSE cb.zipCode END as zipCode',
+            'CASE WHEN (cb.zipcode IS NULL) THEN cd.zipCode ELSE cb.zipcode END as zipCode',
             'na.lastNewsletterId as lastNewsletter',
             'na.lastReadId as lastRead',
             'c.id as userID',
+            'DATE_FORMAT(na.added, \'%Y-%m-%d %H:%i:%s\') as added',
+            'DATE_FORMAT(na.doubleOptinConfirmed, \'%Y-%m-%d %H:%i:%s\') as doubleOptinConfirmed',
         ];
 
         //removes street number for shopware 5
@@ -102,16 +104,6 @@ class NewsletterDbAdapter implements DataDbAdapter
         }
 
         return $columns;
-    }
-
-    /**
-     * Return list with default values for fields which are empty or don't exists
-     *
-     * @return array
-     */
-    private function getDefaultValues()
-    {
-        return $this->defaultValues;
     }
 
     /**
@@ -146,12 +138,12 @@ class NewsletterDbAdapter implements DataDbAdapter
     /**
      * @param $ids
      * @param $columns
+     *
      * @return mixed
      */
     public function read($ids, $columns)
     {
         $builder = $this->getBuilder($columns, $ids);
-
         $result['default'] = $builder->getQuery()->getArrayResult();
 
         return $result;
@@ -161,6 +153,7 @@ class NewsletterDbAdapter implements DataDbAdapter
      * @param $start
      * @param $limit
      * @param $filter
+     *
      * @return array
      */
     public function readRecordIds($start, $limit, $filter)
@@ -195,6 +188,7 @@ class NewsletterDbAdapter implements DataDbAdapter
 
     /**
      * @param array $records
+     *
      * @throws \Enlight_Event_Exception
      * @throws \Exception
      */
@@ -227,7 +221,7 @@ class NewsletterDbAdapter implements DataDbAdapter
 
         foreach ($records['default'] as $newsletterData) {
             try {
-                $count++;
+                ++$count;
                 $newsletterData = $this->validator->filterEmptyString($newsletterData);
                 $this->validator->checkRequiredFields($newsletterData);
 
@@ -302,33 +296,8 @@ class NewsletterDbAdapter implements DataDbAdapter
     }
 
     /**
-     * @param $record
-     * @return array
-     */
-    protected function prepareNewsletterAddress($record)
-    {
-        $keys = [
-            'email' => 'email',
-            'userID' => 'isCustomer',
-            'groupId' => 'groupId',
-            'lastRead' => 'lastReadId',
-            'lastNewsletter' => 'lastMailingId',
-        ];
-
-        $newsletterAddress = [];
-        foreach ($keys as $oldKey => $newKey) {
-            if (isset($record[$oldKey])) {
-                $newsletterAddress[$newKey] = $record[$oldKey];
-            }
-        }
-
-        $newsletterAddress['isCustomer'] = isset($record['userID']);
-
-        return $newsletterAddress;
-    }
-
-    /**
      * @param $message
+     *
      * @throws \Exception
      */
     public function saveMessage($message)
@@ -379,12 +348,13 @@ class NewsletterDbAdapter implements DataDbAdapter
     public function getSections()
     {
         return [
-            ['id' => 'default', 'name' => 'default ']
+            ['id' => 'default', 'name' => 'default '],
         ];
     }
 
     /**
      * @param string $section
+     *
      * @return mixed
      */
     public function getColumns($section)
@@ -401,6 +371,7 @@ class NewsletterDbAdapter implements DataDbAdapter
     /**
      * @param $columns
      * @param $ids
+     *
      * @return QueryBuilder
      */
     public function getBuilder($columns, $ids)
@@ -412,10 +383,49 @@ class NewsletterDbAdapter implements DataDbAdapter
             ->leftJoin('na.newsletterGroup', 'ng')
             ->leftJoin(ContactData::class, 'cd', Join::WITH, 'na.email = cd.email')
             ->leftJoin('na.customer', 'c', JOIN::WITH, 'na.isCustomer = 1')
-            ->leftJoin('c.billing', 'cb')
+            ->leftJoin('c.defaultBillingAddress', 'cb')
             ->where('na.id IN (:ids)')
             ->setParameter('ids', $ids);
 
         return $builder;
+    }
+
+    /**
+     * @param $record
+     *
+     * @return array
+     */
+    protected function prepareNewsletterAddress($record)
+    {
+        $keys = [
+            'email' => 'email',
+            'userID' => 'isCustomer',
+            'groupId' => 'groupId',
+            'lastRead' => 'lastReadId',
+            'lastNewsletter' => 'lastMailingId',
+            'added' => 'added',
+            'doubleOptinConfirmed' => 'doubleOptinConfirmed',
+        ];
+
+        $newsletterAddress = [];
+        foreach ($keys as $oldKey => $newKey) {
+            if (isset($record[$oldKey])) {
+                $newsletterAddress[$newKey] = $record[$oldKey];
+            }
+        }
+
+        $newsletterAddress['isCustomer'] = isset($record['userID']);
+
+        return $newsletterAddress;
+    }
+
+    /**
+     * Return list with default values for fields which are empty or don't exists
+     *
+     * @return array
+     */
+    private function getDefaultValues()
+    {
+        return $this->defaultValues;
     }
 }

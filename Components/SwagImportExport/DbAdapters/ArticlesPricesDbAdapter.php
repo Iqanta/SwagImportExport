@@ -8,21 +8,27 @@
 
 namespace Shopware\Components\SwagImportExport\DbAdapters;
 
+use Shopware\Bundle\SearchBundle\ProductNumberSearchResult;
 use Shopware\Components\Model\ModelManager;
 use Shopware\Components\Model\QueryBuilder;
-use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
-use Shopware\Components\SwagImportExport\Exception\AdapterException;
-use Shopware\Components\SwagImportExport\Validators\ArticlePriceValidator;
 use Shopware\Components\SwagImportExport\DataManagers\ArticlePriceDataManager;
+use Shopware\Components\SwagImportExport\Exception\AdapterException;
+use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
+use Shopware\Components\SwagImportExport\Validators\ArticlePriceValidator;
 use Shopware\Models\Article\Article;
 use Shopware\Models\Article\Detail;
 use Shopware\Models\Article\Price as ArticlePrice;
+use Shopware\Models\Category\Category;
 use Shopware\Models\Customer\Group as CustomerGroup;
+use Shopware\Models\Shop\Shop;
 
 class ArticlesPricesDbAdapter implements DataDbAdapter
 {
     /** @var ModelManager */
     protected $manager;
+
+    /** @var array */
+    protected $categoryIdCollection;
 
     /** @var array */
     protected $logMessages;
@@ -50,6 +56,7 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
      * @param $start
      * @param $limit
      * @param $filter
+     *
      * @return array
      */
     public function readRecordIds($start, $limit, $filter)
@@ -64,7 +71,60 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
             ->orderBy('price.id', 'ASC');
 
         if (!empty($filter)) {
-            $builder->addFilter($filter);
+            if ($filter['variants']) {
+                $builder->andWhere('detail.kind <> 3');
+            } else {
+                $builder->andWhere('detail.kind = 1');
+            }
+
+            if (isset($filter['categories'])) {
+                /** @var Category $category */
+                $category = $this->manager->find(Category::class, $filter['categories'][0]);
+
+                $this->collectCategoryIds($category);
+                $categories = $this->getCategoryIdCollection();
+
+                $categoriesBuilder = $this->manager->createQueryBuilder();
+                $categoriesBuilder->select('article.id')
+                    ->from(Article::class, 'article')
+                    ->leftJoin('article.categories', 'categories')
+                    ->where('categories.id IN (:cids)')
+                    ->setParameter('cids', $categories)
+                    ->groupBy('article.id');
+
+                $articleIds = array_map(
+                    function ($item) {
+                        return $item['id'];
+                    },
+                    $categoriesBuilder->getQuery()->getResult()
+                );
+
+                $builder
+                    ->andWhere('article.id IN (:ids)')
+                    ->setParameter('ids', $articleIds);
+            } else {
+                if (isset($filter['productStreamId'])) {
+                    $productStreamId = $filter['productStreamId'][0];
+
+                    /** @var \Shopware\Models\Shop\Repository $shopRepo */
+                    $shopRepo = $this->manager->getRepository(Shop::class);
+                    $shop = $shopRepo->getActiveDefault();
+                    $contextService = Shopware()->Container()->get('shopware_storefront.context_service');
+                    $context = $contextService->createShopContext($shop->getId());
+                    $criteriaService = Shopware()->Container()->get('shopware_search.store_front_criteria_factory');
+                    $criteria = $criteriaService->createBaseCriteria([$shop->getCategory()->getId()], $context);
+                    $streamRepo = Shopware()->Container()->get('shopware_product_stream.repository');
+                    $streamRepo->prepareCriteria($criteria, $productStreamId);
+
+                    $productNumberSearch = Shopware()->Container()->get('shopware_search.product_number_search');
+                    /** @var ProductNumberSearchResult $products */
+                    $products = $productNumberSearch->search($criteria, $context);
+                    $productNumbers = array_keys($products->getProducts());
+
+                    $builder->andWhere('detail.number IN(:productNumbers)')
+                        ->setParameter('productNumbers', $productNumbers);
+                }
+            }
         }
 
         if ($start) {
@@ -90,8 +150,10 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
     /**
      * @param $ids
      * @param $columns
-     * @return mixed
+     *
      * @throws \Exception
+     *
+     * @return mixed
      */
     public function read($ids, $columns)
     {
@@ -150,7 +212,7 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
             'article.name as name',
             'detail.additionalText as additionalText',
             'detail.purchasePrice as purchasePrice',
-            'supplier.name as supplierName'
+            'supplier.name as supplierName',
         ];
     }
 
@@ -167,6 +229,7 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
      * <b>Note:</b> The logic is copied from the old Import/Export Module
      *
      * @param array $records
+     *
      * @throws \Enlight_Event_Exception
      * @throws \Exception
      */
@@ -192,14 +255,14 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
 
         foreach ($records['default'] as $record) {
             try {
-                $flushCounter++;
+                ++$flushCounter;
                 $record = $this->validator->filterEmptyString($record);
                 $this->validator->checkRequiredFields($record);
                 $record = $this->dataManager->setDefaultFields($record);
                 $this->validator->validate($record, ArticlePriceValidator::$mapper);
 
                 /** @var CustomerGroup $customerGroup */
-                $customerGroup = $customerGroupRepository->findOneBy(["key" => $record['priceGroup']]);
+                $customerGroup = $customerGroupRepository->findOneBy(['key' => $record['priceGroup']]);
                 if (!$customerGroup) {
                     $message = SnippetsHelper::getNamespace()
                         ->get('adapters/articlesPrices/price_group_not_found', 'Price group %s was not found');
@@ -207,7 +270,7 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
                 }
 
                 /** @var Detail $articleDetail */
-                $articleDetail = $detailRepository->findOneBy(["number" => $record['orderNumber']]);
+                $articleDetail = $detailRepository->findOneBy(['number' => $record['orderNumber']]);
                 if (!$articleDetail) {
                     $message = SnippetsHelper::getNamespace()
                         ->get('adapters/article_number_not_found', 'Article with order number %s does not exists');
@@ -215,7 +278,7 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
                 }
 
                 if (isset($record['from'])) {
-                    $record['from'] = intval($record['from']);
+                    $record['from'] = (int) $record['from'];
                 }
 
                 if (empty($record['price']) && empty($record['percent'])) {
@@ -235,24 +298,24 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
                 }
 
                 if (isset($record['price'])) {
-                    $record['price'] = floatval(str_replace(",", ".", $record['price']));
+                    $record['price'] = (float) str_replace(',', '.', $record['price']);
                 }
 
                 if (isset($record['pseudoPrice'])) {
-                    $record['pseudoPrice'] = floatval(str_replace(",", ".", $record['pseudoPrice']));
+                    $record['pseudoPrice'] = (float) str_replace(',', '.', $record['pseudoPrice']);
                 }
 
                 if (isset($record['purchasePrice'])) {
-                    $record['purchasePrice'] = floatval(str_replace(",", ".", $record['purchasePrice']));
+                    $record['purchasePrice'] = (float) str_replace(',', '.', $record['purchasePrice']);
                 }
 
                 if (isset($record['percent'])) {
-                    $record['percent'] = floatval(str_replace(",", ".", $record['percent']));
+                    $record['percent'] = (float) str_replace(',', '.', $record['percent']);
                 }
                 // removes price with same from value from database
                 $this->updateArticleFromPrice($record, $articleDetail->getId());
                 // checks if price belongs to graduation price
-                if ($record['from'] != 1) {
+                if ((int) $record['from'] !== 1) {
                     // updates graduation to value with from value - 1
                     $this->updateArticleToPrice($record, $articleDetail->getId(), $articleDetail->getArticleId());
                 }
@@ -303,12 +366,13 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
     public function getSections()
     {
         return [
-            ['id' => 'default', 'name' => 'default ']
+            ['id' => 'default', 'name' => 'default '],
         ];
     }
 
     /**
      * @param string $section
+     *
      * @return bool|mixed
      */
     public function getColumns($section)
@@ -324,6 +388,7 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
 
     /**
      * @param $message
+     *
      * @throws \Exception
      */
     public function saveMessage($message)
@@ -371,8 +436,25 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
     }
 
     /**
+     * @return array
+     */
+    public function getCategoryIdCollection()
+    {
+        return $this->categoryIdCollection;
+    }
+
+    /**
+     * @param $categoryIdCollection
+     */
+    public function setCategoryIdCollection($categoryIdCollection)
+    {
+        $this->categoryIdCollection[] = $categoryIdCollection;
+    }
+
+    /**
      * @param $columns
      * @param $ids
+     *
      * @return QueryBuilder
      */
     public function getBuilder($columns, $ids)
@@ -392,6 +474,30 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
         return $builder;
     }
 
+    /**
+     * Collects recursively category ids
+     *
+     * @param \Shopware\Models\Category\Category $categoryModel
+     */
+    protected function collectCategoryIds($categoryModel)
+    {
+        $categoryId = $categoryModel->getId();
+        $this->setCategoryIdCollection($categoryId);
+        $categories = $categoryModel->getChildren();
+
+        if (!$categories) {
+            return;
+        }
+
+        foreach ($categories as $category) {
+            $this->collectCategoryIds($category);
+        }
+    }
+
+    /**
+     * @param $record
+     * @param $articleDetailId
+     */
     private function updateArticleFromPrice($record, $articleDetailId)
     {
         $dql = 'DELETE FROM Shopware\Models\Article\Price price
@@ -401,16 +507,17 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
 
         $query = $this->manager->createQuery($dql);
 
-        $query->setParameters(
-            [
-                'customerGroup' => $record['priceGroup'],
-                'detailId' => $articleDetailId,
-                'fromValue' => $record['from'],
-            ]
-        );
-        $query->execute();
+        $query->setParameter('customerGroup', $record['priceGroup'])
+            ->setParameter('detailId', $articleDetailId)
+            ->setParameter('fromValue', $record['from'])
+            ->execute();
     }
 
+    /**
+     * @param $record
+     * @param $articleDetailId
+     * @param $articleId
+     */
     private function updateArticleToPrice($record, $articleDetailId, $articleId)
     {
         $dql = "UPDATE Shopware\Models\Article\Price price SET price.to = :toValue
@@ -421,14 +528,10 @@ class ArticlesPricesDbAdapter implements DataDbAdapter
 
         $query = $this->manager->createQuery($dql);
 
-        $query->setParameters(
-            [
-                'toValue' => $record['from'] - 1,
-                'customerGroup' => $record['priceGroup'],
-                'detailId' => $articleDetailId,
-                'articleId' => $articleId,
-            ]
-        );
-        $query->execute();
+        $query->setParameter('toValue', $record['from'] - 1)
+            ->setParameter('customerGroup', $record['priceGroup'])
+            ->setParameter('detailId', $articleDetailId)
+            ->setParameter('articleId', $articleId)
+            ->execute();
     }
 }

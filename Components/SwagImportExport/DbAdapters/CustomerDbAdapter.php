@@ -13,10 +13,10 @@ use Shopware\Components\Model\ModelManager;
 use Shopware\Components\SwagImportExport\DataManagers\CustomerDataManager;
 use Shopware\Components\SwagImportExport\DataType\CustomerDataType;
 use Shopware\Components\SwagImportExport\Exception\AdapterException;
+use Shopware\Components\SwagImportExport\Service\UnderscoreToCamelCaseServiceInterface;
 use Shopware\Components\SwagImportExport\Utils\DataHelper;
 use Shopware\Components\SwagImportExport\Utils\DbAdapterHelper;
 use Shopware\Components\SwagImportExport\Utils\SnippetsHelper;
-use Shopware\Components\SwagImportExport\Utils\SwagVersionHelper;
 use Shopware\Components\SwagImportExport\Validators\CustomerValidator;
 use Shopware\Models\Country\Country;
 use Shopware\Models\Country\State;
@@ -71,6 +71,11 @@ class CustomerDbAdapter implements DataDbAdapter
      */
     protected $defaultValues = [];
 
+    /**
+     * @var UnderscoreToCamelCaseServiceInterface
+     */
+    private $underscoreToCamelCaseService;
+
     public function __construct()
     {
         $this->manager = Shopware()->Models();
@@ -80,6 +85,7 @@ class CustomerDbAdapter implements DataDbAdapter
         $this->passwordManager = Shopware()->PasswordEncoder();
         $this->config = Shopware()->Config();
         $this->eventManager = Shopware()->Events();
+        $this->underscoreToCamelCaseService = Shopware()->Container()->get('swag_import_export.underscore_camelcase_service');
     }
 
     /**
@@ -228,7 +234,7 @@ class CustomerDbAdapter implements DataDbAdapter
     public function read($ids, $columns)
     {
         foreach ($columns as $key => $value) {
-            if ($value == 'unhashedPassword') {
+            if ($value === 'unhashedPassword') {
                 unset($columns[$key]);
             }
         }
@@ -266,11 +272,14 @@ class CustomerDbAdapter implements DataDbAdapter
             $query->setMaxResults($limit);
         }
 
-        if (SwagVersionHelper::hasMinimumVersion('5.3.0')) {
-            if (array_key_exists('customerStreamId', $filter)) {
-                $query->innerJoin('customer', 's_customer_streams_mapping', 'mapping', 'mapping.customer_id = customer.id AND mapping.stream_id = :streamId');
-                $query->setParameter(':streamId', $filter['customerStreamId']);
-            }
+        if (array_key_exists('customerStreamId', $filter)) {
+            $query->innerJoin(
+                'customer',
+                's_customer_streams_mapping',
+                'mapping',
+                'mapping.customer_id = customer.id AND mapping.stream_id = :streamId'
+            );
+            $query->setParameter(':streamId', $filter['customerStreamId']);
         }
 
         $ids = $query->execute()->fetchAll(\PDO::FETCH_COLUMN);
@@ -503,9 +512,7 @@ class CustomerDbAdapter implements DataDbAdapter
 
         $attributesSelect = [];
         foreach ($columnNames as $attribute) {
-            //underscore to camel case
-            //exmaple: underscore_to_camel_case -> underscoreToCamelCase
-            $attribute = str_replace(' ', '', ucwords(str_replace('_', ' ', $attribute)));
+            $attribute = $this->underscoreToCamelCaseService->underscoreToCamelCase($attribute);
             $attributesSelect[] = sprintf('%s.%s as %s%s', $prefixField, lcfirst($attribute), $prefixSelect, $attribute);
         }
 
@@ -583,7 +590,7 @@ class CustomerDbAdapter implements DataDbAdapter
             //checks for multiple email address
             if (count($customer) > 0 && $customer[0]->getNumber() !== $record['customerNumber']) {
                 $message = SnippetsHelper::getNamespace()
-                    ->get('adapters/customer/multiple_email', 'There are existing email address/es with %s. Please provide subshopID');
+                    ->get('adapters/customer/multiple_email', 'There are existing email address/es with %s having different customer numbers. Please provide subshopID or equalize customer number');
                 throw new AdapterException(sprintf($message, $record['email']));
             }
 
@@ -626,11 +633,7 @@ class CustomerDbAdapter implements DataDbAdapter
     /**
      * @param array $record
      *
-     * @throws AdapterException
-     * @throws \Doctrine\ORM\ORMException
-     * @throws \Doctrine\ORM\OptimisticLockException
-     * @throws \Doctrine\ORM\TransactionRequiredException
-     * @throws \Exception
+     * @throws \RuntimeException
      *
      * @return array
      */
@@ -673,7 +676,7 @@ class CustomerDbAdapter implements DataDbAdapter
             if (!$customerData['group']) {
                 $message = SnippetsHelper::getNamespace()
                     ->get('adapters/customerGroup_not_found', 'Customer Group by key %s not found');
-                throw new \Exception(sprintf($message, $customerData['groupKey']));
+                throw new \RuntimeException(sprintf($message, $customerData['groupKey']));
             }
         }
 

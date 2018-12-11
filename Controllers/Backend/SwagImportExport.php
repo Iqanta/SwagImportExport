@@ -1,15 +1,12 @@
 <?php
-
 /**
  * (c) shopware AG <info@shopware.com>
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
  */
-
 use Shopware\Components\CSRFWhitelistAware;
 use Shopware\Components\SwagImportExport\UploadPathProvider;
-use Shopware\Components\SwagImportExport\Utils\SwagVersionHelper;
 use Shopware\CustomModels\ImportExport\Logger;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\FileBag;
@@ -33,12 +30,6 @@ class Shopware_Controllers_Backend_SwagImportExport extends Shopware_Controllers
         return [
             'downloadFile',
         ];
-    }
-
-    public function indexAction()
-    {
-        parent::indexAction();
-        $this->View()->assign('shopware53Installed', SwagVersionHelper::hasMinimumVersion('5.3.0'));
     }
 
     public function uploadFileAction()
@@ -74,7 +65,7 @@ class Shopware_Controllers_Backend_SwagImportExport extends Shopware_Controllers
         $uploadPathProvider = $this->get('swag_import_export.upload_path_provider');
 
         try {
-            $fileName = $this->Request()->getParam('fileName', null);
+            $fileName = $this->Request()->getParam('fileName');
 
             if ($fileName === null) {
                 throw new \Exception('File name must be provided');
@@ -108,13 +99,17 @@ class Shopware_Controllers_Backend_SwagImportExport extends Shopware_Controllers
             $this->Front()->Plugins()->Json()->setRenderer(false);
 
             $response = $this->Response();
+            $response->clearHeaders();
+            $response->clearRawHeaders();
+
             $response->setHeader('Cache-Control', 'public');
             $response->setHeader('Content-Description', 'File Transfer');
             $response->setHeader('Content-disposition', 'attachment; filename=' . $fileName);
-
             $response->setHeader('Content-Type', $application);
+            $response->sendHeaders();
 
-            echo file_get_contents($filePath);
+            readfile($filePath);
+            exit();
         } catch (\Exception $e) {
             $this->View()->assign(
                 [

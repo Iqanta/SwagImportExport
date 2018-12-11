@@ -30,22 +30,16 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
      */
     public function getCustomerColumns()
     {
-        $columns = [
-            'customer'
+        return [
+            'customer',
+            'attribute',
         ];
-
-        $attributesSelect = $this->getAttributesFieldsByTableName('s_user_attributes', 'userID', 'attribute', 'attrCustomer');
-
-        if (!empty($attributesSelect)) {
-            $columns = array_merge($columns, $attributesSelect);
-        }
-
-        return $columns;
     }
 
     /**
      * @param array $columns
      * @param array $ids
+     *
      * @return \Shopware\Components\Model\QueryBuilder
      */
     public function getBuilder($columns, $ids)
@@ -82,11 +76,9 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
             $query->setMaxResults($limit);
         }
 
-        if (SwagVersionHelper::hasMinimumVersion('5.4.0')) {
-            if (array_key_exists('customerId', $filter)) {
-                $query->andWhere('customer.id = :customerId');
-                $query->setParameter('customerId', $filter['customerId']);
-            }
+        if (SwagVersionHelper::hasMinimumVersion('5.4.0') && array_key_exists('customerId', $filter)) {
+            $query->andWhere('customer.id = :customerId');
+            $query->setParameter('customerId', $filter['customerId']);
         }
 
         $ids = $query->execute()->fetchAll(\PDO::FETCH_COLUMN);
@@ -120,6 +112,7 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
         $customerIds = array_column($customers, 'id');
         $addresses = $this->getAddresses($customerIds);
         $orders = $this->getCustomerOrders($customerIds);
+
         $newsletterRecipients = $this->getNewsletterRecipients($customerIds);
 
         foreach ($customers as &$customer) {
@@ -133,7 +126,11 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
             if ($orders[$customer['id']]) {
                 $customer['orders'] = DbAdapterHelper::decodeHtmlEntities($orders[$customer['id']]);
             }
+            if (array_key_exists('attribute', $customer)) {
+                unset($customer['attribute']['id'], $customer['attribute']['customerId']);
+            }
         }
+        unset($customer);
 
         $result['customers'] = DbAdapterHelper::decodeHtmlEntities($customers);
 
@@ -155,8 +152,7 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
             ->where('address.user_id IN (:ids)')
             ->setParameter('ids', $ids, Connection::PARAM_INT_ARRAY)
             ->execute()
-            ->fetchAll(\PDO::FETCH_GROUP)
-        ;
+            ->fetchAll(\PDO::FETCH_GROUP);
     }
 
     /**
@@ -168,8 +164,18 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
     {
         $builder = $this->manager->createQueryBuilder();
 
-        return $builder->from(Order::class, 'o', 'o.customerId')
-            ->select(['o', 'attr', 'partial payment.{id, name, description}', 'paymentStatus', 'orderStatus', 'details', 'detailAttr', 'billingAddress', 'shippingAddress'])
+        $orders = $builder->from(Order::class, 'o')
+            ->select([
+                'o',
+                'attr',
+                'partial payment.{id, name, description}',
+                'paymentStatus',
+                'orderStatus',
+                'details',
+                'detailAttr',
+                'billingAddress',
+                'shippingAddress',
+            ])
             ->leftJoin('o.details', 'details')
             ->leftJoin('details.attribute', 'detailAttr')
             ->leftJoin('o.billing', 'billingAddress')
@@ -181,8 +187,31 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
             ->where('o.customerId IN (:ids)')
             ->setParameter('ids', $ids, Connection::PARAM_INT_ARRAY)
             ->getQuery()
-            ->getArrayResult()
-        ;
+            ->getArrayResult();
+
+        $indexedOrders = [];
+        foreach ($orders as $order) {
+            /** @var \DateTime $orderTime */
+            $orderTime = $order['orderTime'];
+            $order['orderTime'] = $orderTime->format('Y-m-d H:i:s');
+            foreach ($order['details'] as &$detail) {
+                /** @var \DateTime $releaseDate */
+                $releaseDate = $detail['releaseDate'];
+
+                if (!$releaseDate instanceof \DateTime) {
+                    $releaseDate = new \DateTime('1970-01-01');
+                }
+
+                $detail['releaseDate'] = $releaseDate->format('Y-m-d H:i:s');
+            }
+            unset($detail);
+            if (!array_key_exists($order['customerId'], $indexedOrders)) {
+                $indexedOrders[$order['customerId']] = [];
+            }
+            $indexedOrders[$order['customerId']][] = $order;
+        }
+
+        return $indexedOrders;
     }
 
     /**
@@ -200,7 +229,6 @@ class CustomerCompleteDbAdapter extends CustomerDbAdapter
             ->where('customer.id IN (:ids)')
             ->setParameter('ids', $ids, Connection::PARAM_INT_ARRAY)
             ->execute()
-            ->fetchAll(\PDO::FETCH_GROUP|\PDO::FETCH_UNIQUE)
-        ;
+            ->fetchAll(\PDO::FETCH_GROUP | \PDO::FETCH_UNIQUE);
     }
 }
