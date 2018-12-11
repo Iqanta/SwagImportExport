@@ -81,7 +81,6 @@ class ExportNewOrdersCommand extends ShopwareCommand
     protected function prepareExportInputValidation(InputInterface $input): array
     {
         $profile = $input->getOption('profile');
-
         $format = $input->getOption('format');
 
         /** @var ModelManager $em */
@@ -94,15 +93,17 @@ class ExportNewOrdersCommand extends ShopwareCommand
         $profileEntity = $profileRepository->findOneBy(['name' => $profile]);
         $this->validateProfiles($profileEntity, $profile);
 
-        // if no format is specified try to find it from the filename
+        // if no format is specified default format comes in place
         if (empty($format)) {
             $format = self::DEFAULT_FORMAT;
         }
 
         // validate type
+        $format = strtolower(trim($format));
         if (!in_array($format, ['csv', 'xml'])) {
             throw new \Exception(sprintf('Invalid format: \'%s\'! Valid formats are: CSV and XML.', $format));
         }
+
         return [
             'profileEntity' => $profileEntity,
             'format' => $format
