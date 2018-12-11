@@ -10,6 +10,7 @@ use Doctrine\ORM\Configuration;
 use Doctrine\ORM\Tools\SchemaTool;
 use DoctrineExtensions\Query\Mysql\GroupConcat;
 use Shopware\Commands\SwagImportExport\ExportCommand;
+use Shopware\Commands\SwagImportExport\ExportNewOrdersCommand;
 use Shopware\Commands\SwagImportExport\ImportCommand;
 use Shopware\Commands\SwagImportExport\ProfilesCommand;
 use Shopware\Components\CacheManager;
@@ -541,6 +542,7 @@ final class Shopware_Plugins_Backend_SwagImportExport_Bootstrap extends Shopware
             [
                 new ImportCommand(),
                 new ExportCommand(),
+                new ExportNewOrdersCommand(),
                 new ProfilesCommand(),
             ]
         );
