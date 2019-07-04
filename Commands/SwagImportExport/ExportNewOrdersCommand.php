@@ -45,16 +45,21 @@ class ExportNewOrdersCommand extends ShopwareCommand
         $this->registerErrorHandler($output);
 
         $orders = $this->getNewOrders();
+        $orderFiles = [];
 
         foreach ($orders as $order) {
-            $filePath = $this->getFilePath($order['number'], $validatedInputVars['format']);
-            $output->writeln('<info>' . sprintf('Write to file: %s.', $filePath) . '</info>');
+            $filePath = [
+                'tmpFile' => tempnam(sys_get_temp_dir(), 'OB_ORDER_'),
+                'destFile' => $this->getFilePath($order['number'], $validatedInputVars['format'])
+            ];
+
+            $output->writeln('<info>' . sprintf('Write to file: %s.', $filePath['tmpFile']) . '</info>');
             $helper = new CommandHelper(
                 [
                     'profileEntity' => $validatedInputVars['profileEntity'],
                     'format' => $validatedInputVars['format'],
                     'username' => 'Commandline',
-                    'filePath' => $filePath,
+                    'filePath' => $filePath['tmpFile'],
                     'order' => $this->getOrderByNumber($order['number']),
                 ]
             );
@@ -69,6 +74,17 @@ class ExportNewOrdersCommand extends ShopwareCommand
                 $output->writeln('<info>' . sprintf('Processed: %d.', $position) . '</info>');
                 $this->markOrderAsExported($order['id']);
             }
+
+            array_push($orderFiles, $filePath);
+        }
+
+        foreach ($orderFiles as $filePath) {
+            $output->writeln('<info>' . sprintf('Move to file: %s.', $filePath['destFile']) . '</info>');
+            rename($filePath['tmpFile'], $filePath['destFile']);
+        }
+
+        if (empty($orders)) {
+            $output->writeln('<info>No orders to export found</info>');
         }
     }
 
