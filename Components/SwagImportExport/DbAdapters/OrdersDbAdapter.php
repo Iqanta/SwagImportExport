@@ -445,6 +445,7 @@ class OrdersDbAdapter implements DataDbAdapter
             'details.ean as ean',
             'details.packUnit as packUnit',
             'details.unit as unit',
+            'article.weight as weight',
             'details_attributes.netPrice as net_price'
         ];
 
@@ -553,6 +554,7 @@ class OrdersDbAdapter implements DataDbAdapter
             ->leftJoin('details.order', 'orders')
             ->leftJoin('details.tax', 'taxes')
             ->leftJoin('details.attribute', 'details_attributes')
+            ->leftJoin('details.articleDetail', 'article')
             ->leftJoin('orders.billing', 'billing')
             ->leftJoin('billing.country', 'billingCountry')
             ->leftJoin('billing.state', 'billingState')
