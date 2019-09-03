@@ -110,6 +110,8 @@ class DataWorkflow
             // process that array with the full transformation chain
             $data = $this->transformerChain->transformForward($data);
 
+            $data = $this->addPallet($data);
+
             // now the array should be a tree and we write it to the file
             $this->fileIO->writeRecords($outputFileName, $data);
 
@@ -228,5 +230,34 @@ class DataWorkflow
     {
         /* @var UploadPathProvider $uploadPathProvider */
         return Shopware()->Container()->get('swag_import_export.upload_path_provider');
+    }
+
+    /**
+     * @todo Make this configurable
+     *
+     * @param array $data
+     * @return array
+     */
+    private function addPallet(array $data)
+    {
+        foreach ($data['order'] as $index => $order) {
+            if ($order['isHaulage'] === '0') {
+                $data['order'][$index]['deliveryClass'] = 'paket';
+            } else {
+                $shippingAmount = (float) $order['invoiceShipping'];
+
+                if ($shippingAmount <= 62) {
+                    $data['order'][$index]['deliveryClass'] = 'palette_1_4';
+                } elseif ($shippingAmount <= 84) {
+                    $data['order'][$index]['deliveryClass'] = 'palette_1_2';
+                } else {
+                    $data['order'][$index]['deliveryClass'] = 'palette_1_1';
+                }
+            }
+
+            unset ($data['order'][$index]['isHaulage']);
+        }
+
+        return $data;
     }
 }

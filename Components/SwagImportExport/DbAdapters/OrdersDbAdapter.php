@@ -421,6 +421,7 @@ class OrdersDbAdapter implements DataDbAdapter
             'orders.currency as currency',
             'orders.currencyFactor as currencyFactor',
             'orders.remoteAddress as remoteAddress',
+            'attr.spedition as spedition',
             'payment.id as paymentId',
             'payment.description as paymentDescription',
             'paymentStatus.id as paymentStatusId',
