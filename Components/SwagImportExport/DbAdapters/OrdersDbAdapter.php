@@ -421,7 +421,7 @@ class OrdersDbAdapter implements DataDbAdapter
             'orders.currency as currency',
             'orders.currencyFactor as currencyFactor',
             'orders.remoteAddress as remoteAddress',
-            'attr.spedition as spedition',
+            'dispatch_attr.spedition as spedition',
             'payment.id as paymentId',
             'payment.description as paymentDescription',
             'paymentStatus.id as paymentStatusId',
@@ -566,6 +566,7 @@ class OrdersDbAdapter implements DataDbAdapter
             ->leftJoin('orders.paymentStatus', 'paymentStatus')
             ->leftJoin('orders.orderStatus', 'orderStatus')
             ->leftJoin('orders.dispatch', 'dispatch')
+            ->leftJoin('dispatch.attribute', 'dispatch_attr')
             ->leftJoin('orders.customer', 'customer')
             ->leftJoin('orders.attribute', 'attr')
             ->where('details.id IN (:ids)')

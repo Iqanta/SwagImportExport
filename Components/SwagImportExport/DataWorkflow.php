@@ -241,7 +241,7 @@ class DataWorkflow
     private function addPallet(array $data)
     {
         foreach ($data['order'] as $index => $order) {
-            if ($order['isHaulage'] === '0') {
+            if (($order['isHaulage'] === '0') || ($order['isHaulage'] === '')) {
                 $data['order'][$index]['deliveryClass'] = 'paket';
             } else {
                 $shippingAmount = (float) $order['invoiceShipping'];
