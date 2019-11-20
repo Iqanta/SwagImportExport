@@ -8,6 +8,7 @@
 
 namespace Tests\Helper;
 
+use PHPUnit\DbUnit\DataSet\SymfonyYamlParser;
 use Shopware\Components\SwagImportExport\Factories\DataFactory;
 
 class DbAdapterTestHelper extends ImportExportTestHelper
@@ -65,7 +66,7 @@ class DbAdapterTestHelper extends ImportExportTestHelper
     public function parseYaml($yamlFile)
     {
         if ($this->parser === null) {
-            $this->parser = new \PHPUnit_Extensions_Database_DataSet_SymfonyYamlParser();
+            $this->parser = new SymfonyYamlParser();
         }
 
         return $this->parser->parseYaml($yamlFile);

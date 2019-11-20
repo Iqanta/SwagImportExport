@@ -206,7 +206,7 @@ class TranslationsDbAdapter implements DataDbAdapter
 
         $validator = $this->getValidator();
         $importMapper = $this->getElementMapper();
-        $translationWriter = new \Shopware_Components_Translation();
+        $translationWriter = Shopware()->Container()->get('translation');
 
         foreach ($records['default'] as $index => $record) {
             try {
