@@ -23,14 +23,7 @@ class DecimalTransformer implements DataTransformerAdapter
         'length',
         'tax',
         'purchaseUnit',
-        'referenceUnit',
-        'price',
-        'pseudoPrice',
-        'purchasePrice',
-        'invoiceAmount',
-        'invoiceAmountNet',
-        'invoiceShipping',
-        'invoiceShippingNet',
+        'referenceUnit'
     ];
 
     /** @var \Enlight_Plugin_Bootstrap_Config $pluginConfig */
